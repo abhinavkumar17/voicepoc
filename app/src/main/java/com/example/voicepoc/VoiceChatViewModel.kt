@@ -3,14 +3,9 @@ package com.example.voicepoc
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
-import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.microsoft.cognitiveservices.speech.*
-import com.microsoft.cognitiveservices.speech.audio.AudioConfig
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.withContext
 import java.util.*
 
 // imports you already have for Speech SDK + coroutines + compose state
@@ -20,7 +15,8 @@ data class ChatMessage(
     val id: String = java.util.UUID.randomUUID().toString(),
     val from: Sender,
     val text: String,
-    val isThinking: Boolean = false
+    val isThinking: Boolean = false,
+    val timeMillis: Long = System.currentTimeMillis()   // add this
 )
 enum class ListenMode { PushToTalk, Continuous }
 
@@ -246,4 +242,10 @@ class VoiceChatViewModel(
         kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Main) { block() }
     private suspend fun <T> withContextIO(block: suspend () -> T): T =
         kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) { block() }
+
+    // In your VM or a UI util file
+    sealed interface ChatRow {
+        data class Bubble(val msg: ChatMessage) : ChatRow
+        data class TimeStamp(val hourMin: String, val sec: String, val ampm: String) : ChatRow
+    }
 }

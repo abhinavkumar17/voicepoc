@@ -6,10 +6,13 @@ import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Close
@@ -22,82 +25,114 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.res.vectorResource
+import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.BaselineShift
+import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.zIndex
 import kotlinx.coroutines.delay
 
 @Composable
 fun VoiceChatScreen(vm: VoiceChatViewModel) {
-    val msgs       by remember { derivedStateOf { vm.messages } }
-    val input      by remember { derivedStateOf { vm.input } }
-    val listening  by remember { derivedStateOf { vm.isListening } }
-    val voiceMode  by remember { derivedStateOf { vm.voiceSession } }   // the one new flag
-    val speaking by remember { derivedStateOf { vm.isSpeaking } }
+    val msgs by remember { derivedStateOf { vm.messages } }
+    val rows = remember(msgs) { msgs.asRowsWithBotTimeStamps() }
 
-    val bottomBarHeight = 76.dp
+    val input by remember { derivedStateOf { vm.input } }
+    val listening by remember { derivedStateOf { vm.isListening } }
+    val voiceMode by remember { derivedStateOf { vm.voiceSession } }
+    val speaking by remember { derivedStateOf { vm.isSpeaking } }
+    val VOICE_CONTROLS_PADDING = 112.dp
+
+
+    // 1) List state + auto-scroll
+    val listState = rememberLazyListState()
+    LaunchedEffect(rows.size) {
+        if (rows.isNotEmpty()) listState.animateScrollToItem(rows.lastIndex)
+    }
 
     Scaffold(
         topBar = { HeaderBarSimple() },
-
-        // Text UI only when NOT in voice session
         bottomBar = {
             if (!voiceMode) {
                 BottomBar(
                     value = input,
                     onChange = vm::onInputChange,
-                    onSend   = vm::sendText
+                    onSend = vm::sendText,
+                    onMic = vm::enterVoiceMode
                 )
             }
         },
-
-        // Single FAB to ENTER voice mode
-        floatingActionButton = {
-            if (!voiceMode) {
-                MicFab(
-                    listening = listening,
-                    speaking  = speaking,
-                   // onToggle  = { if (listening) vm.stopMic() else vm.startMic() }
-                    onToggle  = { vm.enterVoiceMode() }
-                )
-            }
-        },
-        floatingActionButtonPosition = FabPosition.End,
-        containerColor = Color(0xFFFAF5FF)
+        containerColor = RogersColors.Surface
     ) { pad ->
-        Box(Modifier.fillMaxSize().padding(pad)) {
+        val topPad = pad.calculateTopPadding()
+        val bottomPad = pad.calculateBottomPadding() + 16.dp
+        val extraForVoice = if (voiceMode) VOICE_CONTROLS_PADDING else 0.dp
 
+        val listState = rememberLazyListState()
+
+        // Auto-scroll when data grows OR when entering voice mode
+        LaunchedEffect(rows.size, voiceMode) {
+            if (rows.isNotEmpty()) listState.animateScrollToItem(rows.lastIndex)
+        }
+
+        Box(Modifier.fillMaxSize()) {
             LazyColumn(
-                Modifier.fillMaxSize().padding(horizontal = 12.dp),
+                state = listState,
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(top = topPad) // keep list below app bar
+                    .background(RogersColors.Surface)
+                    .padding(horizontal = 12.dp),
                 contentPadding = PaddingValues(
                     top = 12.dp,
-                    bottom = if (voiceMode) 16.dp else bottomBarHeight + 16.dp
+                    bottom = bottomPad + extraForVoice // <-- key change
                 ),
                 verticalArrangement = Arrangement.spacedBy(10.dp)
             ) {
-                items(msgs, key = { it.id }) { MessageBubble(it) }
+                items(
+                    items = rows,
+                    key = {
+                        when (it) {
+                            is VoiceChatViewModel.ChatRow.Bubble -> it.msg.id
+                            is VoiceChatViewModel.ChatRow.TimeStamp -> "ts-${it.hourMin}-${it.sec}-${it.ampm}-${it.hashCode()}"
+                        }
+                    }
+                ) { row ->
+                    when (row) {
+                        is VoiceChatViewModel.ChatRow.TimeStamp -> TimeStampRow(
+                            row.hourMin,
+                            row.sec,
+                            row.ampm
+                        )
+
+                        is VoiceChatViewModel.ChatRow.Bubble -> MessageBubble(row.msg)
+                    }
+                }
             }
 
-            // Two big buttons shown during the entire session
-            // -------- VoiceChatScreen excerpt --------
             if (voiceMode) {
                 SpeakingControls(
                     listening = listening,
-                    speaking  = speaking,                 // <- keep this
+                    speaking = speaking,
                     onMicOrInterrupt = {
-                        if (speaking) { vm.cancelTts(); if (!listening) vm.startMic() }
-                        else { if (listening) vm.stopMic() else vm.startMic() }
+                        if (speaking) {
+                            vm.cancelTts(); if (!listening) vm.startMic()
+                        } else {
+                            if (listening) vm.stopMic() else vm.startMic()
+                        }
                     },
                     onCancel = { vm.endVoiceMode() },
                     modifier = Modifier
                         .align(Alignment.BottomCenter)
+                        .navigationBarsPadding() // lift above gesture bar
                         .padding(bottom = 24.dp)
                 )
-
             }
         }
     }
 }
+
 
 @Composable
 private fun MicFab(
@@ -159,51 +194,33 @@ private fun SpeakingControls(
     speaking: Boolean,
     onMicOrInterrupt: () -> Unit,
     onCancel: () -> Unit,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    showMicButton: Boolean = true // set false if you want only the red X
 ) {
-    // Pulse the left FAB while listening or speaking (barge-in available)
-    val scale by rememberInfiniteTransition(label = "pulse")
-        .animateFloat(
-            initialValue = 1f,
-            targetValue = 1.10f,
-            animationSpec = infiniteRepeatable(
-                animation = tween(900, easing = LinearEasing),
-                repeatMode = RepeatMode.Reverse
-            ),
-            label = "pulseScale"
-        )
-
     Row(
         modifier = modifier.navigationBarsPadding(),
         horizontalArrangement = Arrangement.Center
     ) {
-        val pulseMod =
-            if (listening || speaking) Modifier.graphicsLayer { scaleX = scale; scaleY = scale }
-            else Modifier
-
-        // LEFT: Mic / Stop / Wave(Interrupt)
-        FloatingActionButton(
-            onClick = onMicOrInterrupt,
-            containerColor = Color(0xFF6750A4),
-            modifier = pulseMod.size(64.dp)
-        ) {
-            val icon = when {
-                speaking  -> ImageVector.vectorResource(R.drawable.outline_waves_24) // interrupt
-                listening -> ImageVector.vectorResource(R.drawable.outline_mic_24)                                      // stop listening
-                else      -> ImageVector.vectorResource(R.drawable.outline_mic_24)     // start listening
-            }
-            Icon(icon, contentDescription = null, tint = Color.White)
+        if (showMicButton) {
+            // Left: red circular button; when speaking -> animated waves; while listening -> static mic
+            RoundRedButton(
+                onClick = onMicOrInterrupt,
+                showWave = speaking,
+                isSpeaking = speaking
+            )
+            Spacer(Modifier.width(20.dp))
         }
 
-        Spacer(Modifier.width(28.dp))
-
-        // RIGHT: Exit voice mode
-        FloatingActionButton(
-            onClick = onCancel,
-            containerColor = Color(0xFFB3261E),
-            modifier = Modifier.size(64.dp)
+        // Right: red exit button
+        Box(
+            Modifier
+                .size(64.dp)
+                .clip(CircleShape)
+                .background(Color(0xFFD32F2F))
+                .clickable(onClick = onCancel),
+            contentAlignment = Alignment.Center
         ) {
-            Icon(Icons.Default.Close, contentDescription = "Exit voice mode", tint = Color.White)
+            Icon(Icons.Default.Close, contentDescription = null, tint = Color.White)
         }
     }
 }
@@ -233,20 +250,60 @@ fun HeaderBarSimple() {
 @Composable
 fun MessageBubble(m: ChatMessage) {
     val isUser = m.from == Sender.User
-    val bubbleColor = if (isUser) Color(0xFFF9F9F9) else Color(0xFFEDEDED)
+    val bubbleColor = if (isUser) RogersColors.UserBubble else RogersColors.AgentBubble
+    val textColor   = if (isUser) RogersColors.UserText  else RogersColors.AgentText
+    val horizontal  = if (isUser) Arrangement.End else Arrangement.Start
 
+    Row(Modifier.fillMaxWidth(), horizontalArrangement = horizontal) {
+        Surface(
+            color = bubbleColor,
+            contentColor = textColor,
+            tonalElevation = 0.dp,
+            shadowElevation = if (isUser) 2.dp else 1.dp,
+            shape = MaterialTheme.shapes.extraLarge // 18dp round
+        ) {
+            Box(
+                Modifier
+                    .widthIn(max = 360.dp)
+                    .padding(horizontal = 14.dp, vertical = 10.dp)
+            ) {
+                if (m.isThinking) TypingDots() else Text(m.text)
+            }
+        }
+    }
+}
+
+@Composable
+fun TimeStampRow(hourMin: String, sec: String, ampm: String) {
+    val text = buildAnnotatedString {
+        append(hourMin)            // h:mm
+        append(" ")
+        withStyle(
+            SpanStyle(
+                fontSize = MaterialTheme.typography.labelSmall.fontSize * 0.85f,
+                baselineShift = BaselineShift.Superscript,
+                color = Color(0xFF8E8E8E)
+            )
+        ) { append(sec) }          // ss
+        append(ampm)               // " AM"/" PM"
+    }
+
+    // left-aligned, same width as bubbles
     Row(
-        Modifier.fillMaxWidth(),
-        horizontalArrangement = if (isUser) Arrangement.End else Arrangement.Start
+        modifier = Modifier
+            .fillMaxWidth(),
+        horizontalArrangement = Arrangement.Start
     ) {
         Box(
             Modifier
-                .widthIn(max = 360.dp)
-                .clip(MaterialTheme.shapes.extraLarge)
-                .background(bubbleColor)
-                .padding(horizontal = 14.dp, vertical = 10.dp)
+                .widthIn(max = 360.dp)   // match MessageBubble max width
+                .padding(start = 6.dp)   // small inset like the web chip
         ) {
-            if (m.isThinking) TypingDots() else Text(m.text)
+            Text(
+                text = text,
+                color = Color(0xFF8E8E8E),
+                style = MaterialTheme.typography.labelSmall
+            )
         }
     }
 }
@@ -269,4 +326,97 @@ fun TypingDots() {
     }
 
     Text(text = dots, color = Color.Gray)
+}
+
+private fun List<ChatMessage>.asRowsWithBotTimeStamps(): List<VoiceChatViewModel.ChatRow> {
+    if (isEmpty()) return emptyList()
+    val out = mutableListOf<VoiceChatViewModel.ChatRow>()
+    for (m in this) {
+        if (m.from == Sender.Bot) {
+            val (hm, ss, ap) = splitClock(m.timeMillis)
+            out += VoiceChatViewModel.ChatRow.TimeStamp(hm, ss, ap)
+        }
+        out += VoiceChatViewModel.ChatRow.Bubble(m)
+    }
+    return out
+}
+
+// 3) Formatting helpers
+private fun splitClock(t: Long): Triple<String, String, String> {
+    val z = java.time.Instant.ofEpochMilli(t).atZone(java.time.ZoneId.systemDefault())
+    val hm  = z.format(java.time.format.DateTimeFormatter.ofPattern("h:mm"))   // e.g., 7:50
+    val ss  = z.format(java.time.format.DateTimeFormatter.ofPattern("ss"))     // e.g., 10
+    val ap  = z.format(java.time.format.DateTimeFormatter.ofPattern(" a"))     // e.g.,  PM
+    return Triple(hm, ss, ap)
+}
+
+@Composable
+private fun AnimatedWaveIcon(
+    modifier: Modifier = Modifier,
+    barCount: Int = 4,
+    isSpeaking: Boolean
+) {
+    // animate bar heights with phase offsets
+    val anim = rememberInfiniteTransition(label = "bars")
+    val phases = List(barCount) { i ->
+        anim.animateFloat(
+            initialValue = 0f,
+            targetValue = 1f,
+            animationSpec = infiniteRepeatable(
+                animation = tween(durationMillis = 900 + i * 90, easing = LinearEasing),
+                repeatMode = RepeatMode.Reverse
+            ),
+            label = "bar-$i"
+        )
+    }
+
+    Canvas(modifier.size(22.dp)) {
+        val w = size.width
+        val h = size.height
+        val gap = w / (barCount * 2f + (barCount - 1))
+        val barW = gap * 2f
+        val maxH = h
+        val minH = h * 0.25f
+
+        for (i in 0 until barCount) {
+            val p = phases[i].value
+            val t = if (isSpeaking) p else 0.0f
+            val bh = minH + (maxH - minH) * t
+            val left = i * (barW + gap)
+            val top = (h - bh) / 2f
+            drawRoundRect(
+                color = Color.White,
+                topLeft = androidx.compose.ui.geometry.Offset(left, top),
+                size = androidx.compose.ui.geometry.Size(barW, bh),
+                cornerRadius = androidx.compose.ui.geometry.CornerRadius(barW / 2f, barW / 2f)
+            )
+        }
+    }
+}
+
+@Composable
+private fun RoundRedButton(
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+    showWave: Boolean,
+    isSpeaking: Boolean
+) {
+    Box(
+        modifier
+            .size(64.dp)
+            .clip(CircleShape)
+            .background(Color(0xFFD32F2F))
+            .clickable(onClick = onClick),
+        contentAlignment = Alignment.Center
+    ) {
+        if (showWave) {
+            AnimatedWaveIcon(isSpeaking = isSpeaking)
+        } else {
+            Icon(
+                imageVector = ImageVector.vectorResource(id = R.drawable.outline_mic_24),
+                contentDescription = null,
+                tint = Color.White
+            )
+        }
+    }
 }

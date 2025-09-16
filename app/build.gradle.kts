@@ -36,6 +36,7 @@ android {
     }
     buildFeatures {
         compose = true
+        viewBinding = true
     }
 }
 
@@ -51,6 +52,12 @@ dependencies {
     implementation(libs.androidx.compose.animation.core)
     implementation(libs.androidx.compose.runtime)
     implementation(libs.androidx.compose.foundation.layout)
+    implementation(libs.material)
+    implementation(libs.androidx.appcompat)
+    implementation(libs.androidx.constraintlayout)
+    implementation(libs.androidx.navigation.fragment.ktx)
+    implementation(libs.androidx.navigation.ui.ktx)
+    implementation(libs.androidx.compose.foundation)
     // implementation(libs.androidx.compose.material3)
     testImplementation(libs.junit)
     androidTestImplementation(libs.androidx.junit)
